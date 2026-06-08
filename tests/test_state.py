@@ -31,9 +31,9 @@ def _sample_pr() -> PRMetadata:
     )
 
 
-def test_minimal_state_only_requires_pr() -> None:
-    """Constructing with only ``pr`` should succeed; other fields default."""
-    state = AgentState(pr=_sample_pr())
+def test_minimal_state_requires_pr_and_raw_diff() -> None:
+    """Constructing with ``pr`` and ``raw_diff`` succeeds; other fields default."""
+    state = AgentState(pr=_sample_pr(), raw_diff="@@ -1 +1 @@\n-a\n+b\n")
 
     assert state.diff is None
     assert state.plan is None
@@ -46,19 +46,23 @@ def test_minimal_state_only_requires_pr() -> None:
 
 def test_meta_auto_populates() -> None:
     """``meta`` should be created with a uuid run_id and a tz-aware timestamp."""
-    state = AgentState(pr=_sample_pr())
+    state = AgentState(pr=_sample_pr(), raw_diff="")
 
-    assert state.meta.run_id  # non-empty
-    assert len(state.meta.run_id) == 36  # standard uuid4 string length
+    assert state.meta.run_id
+    assert len(state.meta.run_id) == 36
     assert isinstance(state.meta.started_at, datetime)
-    assert state.meta.started_at.tzinfo is not None  # timezone-aware
+    assert state.meta.started_at.tzinfo is not None
 
 
 def test_state_without_pr_raises() -> None:
     """``pr`` has no default; omitting it must raise ValidationError."""
     with pytest.raises(ValidationError):
-        AgentState()  # type: ignore[call-arg]
+        AgentState(raw_diff="")  # type: ignore[call-arg]
 
+def test_state_without_raw_diff_raises() -> None:
+    """``raw_diff`` has no default; omitting it must raise ValidationError."""
+    with pytest.raises(ValidationError):
+        AgentState(pr=_sample_pr())  # type: ignore[call-arg]
 
 def test_finding_rejects_unknown_category() -> None:
     """Categories are restricted to the Category enum."""
@@ -72,9 +76,10 @@ def test_finding_rejects_unknown_category() -> None:
 
 
 def test_state_round_trips_through_json() -> None:
-    """Serializing to JSON and back should preserve the state."""
+    """Serializing to JSON and back preserves the state."""
     original = AgentState(
         pr=_sample_pr(),
+        raw_diff="@@ -10,1 +10,1 @@\n-old\n+new\n",
         findings=[
             Finding(
                 category=Category.SECURITY,

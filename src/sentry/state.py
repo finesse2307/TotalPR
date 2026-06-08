@@ -140,6 +140,7 @@ class AgentState(BaseModel):
     """
 
     pr: PRMetadata
+    raw_diff: str
     diff: ParsedDiff | None = None
     plan: Plan | None = None
     tool_results: list[ToolResult] = Field(default_factory=list)
