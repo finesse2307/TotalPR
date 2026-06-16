@@ -29,6 +29,7 @@ from sentry.graph import build_graph
 from sentry.nodes.run_tool import ToolRegistry
 from sentry.posting import NoopPoster
 from sentry.state import AgentState, PRMetadata, ToolName
+from sentry.telemetry import init_tracing
 from sentry.tools.ruff_tool import make_ruff_tool
 
 
@@ -81,6 +82,11 @@ def make_stub_tool(name: str) -> Callable[[dict[str, str]], str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--trace", action="store_true",
+        help="Enable console export of OpenTelemetry spans.",
+    )
+    
+    parser.add_argument(
         "case", nargs="?", help="Case id (e.g. case-001) or 1-indexed position."
     )
     parser.add_argument(
@@ -105,6 +111,7 @@ def main() -> int:
         )
         return 1
 
+    init_tracing(enable_console=args.trace)
     real_llm = AnthropicLLMClient()
     cached_llm = SQLiteCacheLLMClient(
         real_llm, db_path=args.cache_db, namespace=real_llm.model

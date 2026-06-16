@@ -21,6 +21,7 @@ from sentry.nodes.post_comment import make_post_comment_node
 from sentry.nodes.run_tool import ToolRegistry, make_run_tool_node
 from sentry.posting import CommentPoster
 from sentry.state import AgentState
+from sentry.telemetry import with_span
 
 
 def build_graph(
@@ -36,12 +37,12 @@ def build_graph(
     """
     graph: StateGraph = StateGraph(AgentState)
 
-    graph.add_node("parse_diff", parse_diff)
-    graph.add_node("plan", make_plan_node(llm))
-    graph.add_node("run_tool", make_run_tool_node(tools))
-    graph.add_node("critique", make_critique_node(llm))
-    graph.add_node("format_review", format_review)
-    graph.add_node("post_comment", make_post_comment_node(poster))
+    graph.add_node("parse_diff", with_span("parse_diff", parse_diff))
+    graph.add_node("plan", with_span("plan", make_plan_node(llm)))
+    graph.add_node("run_tool", with_span("run_tool", make_run_tool_node(tools)))
+    graph.add_node("critique", with_span("critique", make_critique_node(llm)))
+    graph.add_node("format_review", with_span("format_review", format_review))
+    graph.add_node("post_comment", with_span("post_comment", make_post_comment_node(poster)))
 
     graph.add_edge(START, "parse_diff")
     graph.add_edge("parse_diff", "plan")
