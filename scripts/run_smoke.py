@@ -18,7 +18,7 @@ import argparse
 import json
 import os
 import sys
-from collections.abc import Callable
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +30,11 @@ from sentry.nodes.run_tool import ToolRegistry
 from sentry.posting import NoopPoster
 from sentry.state import AgentState, PRMetadata, ToolName
 from sentry.telemetry import init_tracing
+from sentry.tools.docs_lookup_tool import make_docs_lookup_tool
+from sentry.tools.ripgrep_tool import make_ripgrep_tool
 from sentry.tools.ruff_tool import make_ruff_tool
+from sentry.tools.semgrep_tool import make_semgrep_tool
+from sentry.workspace import materialize_workspace
 
 
 def load_env_file(path: Path) -> None:
@@ -71,21 +75,8 @@ def pick_case(
         f"{[c['id'] for c in cases]}"
     )
 
-
-def make_stub_tool(name: str) -> Callable[[dict[str, str]], str]:
-    def stub(args: dict[str, str]) -> str:
-        return f"(stub: {name} not yet implemented; args={args})"
-
-    return stub
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--trace", action="store_true",
-        help="Enable console export of OpenTelemetry spans.",
-    )
-    
     parser.add_argument(
         "case", nargs="?", help="Case id (e.g. case-001) or 1-indexed position."
     )
@@ -101,9 +92,15 @@ def main() -> int:
         "--eval-set", type=Path, default=Path("evals/eval_set.json"),
         help="Path to eval_set.json.",
     )
+    parser.add_argument(
+        "--trace", action="store_true",
+        help="Enable console export of OpenTelemetry spans.",
+    )
     args = parser.parse_args()
 
     load_env_file(Path(".env"))
+    init_tracing(enable_console=args.trace)
+
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print(
             "ERROR: ANTHROPIC_API_KEY not set in env or .env",
@@ -111,24 +108,15 @@ def main() -> int:
         )
         return 1
 
-    init_tracing(enable_console=args.trace)
     real_llm = AnthropicLLMClient()
     cached_llm = SQLiteCacheLLMClient(
         real_llm, db_path=args.cache_db, namespace=real_llm.model
     )
     budgeted_llm = BudgetedLLMClient(cached_llm, cap_usd=args.cap)
 
-    tools: ToolRegistry = {
-        ToolName.RUFF: make_ruff_tool(),
-        ToolName.SEMGREP: make_stub_tool("semgrep"),
-        ToolName.RIPGREP: make_stub_tool("ripgrep"),
-        ToolName.DOCS_LOOKUP: make_stub_tool("docs_lookup"),
-    }
-
-    graph = build_graph(llm=budgeted_llm, tools=tools, poster=NoopPoster())
-
     eval_data = json.loads(args.eval_set.read_text())
     case = pick_case(eval_data["cases"], args.case)
+    raw_diff = synth_unified_diff(case["filename"], case["diff"])
 
     print(f"Running case: {case['id']} ({case['name']})")
     print(f"Model:    {real_llm.model}")
@@ -145,10 +133,22 @@ def main() -> int:
             author="smoke",
             title=case["name"],
         ),
-        raw_diff=synth_unified_diff(case["filename"], case["diff"]),
+        raw_diff=raw_diff,
     )
 
-    final = graph.invoke(initial)
+    with tempfile.TemporaryDirectory(prefix="sentry-ws-") as ws_str:
+        workspace = Path(ws_str)
+        materialize_workspace(raw_diff, workspace)
+
+        tools: ToolRegistry = {
+            ToolName.RUFF: make_ruff_tool(),
+            ToolName.SEMGREP: make_semgrep_tool(workspace_path=workspace),
+            ToolName.RIPGREP: make_ripgrep_tool(workspace_path=workspace),
+            ToolName.DOCS_LOOKUP: make_docs_lookup_tool(),
+        }
+
+        graph = build_graph(llm=budgeted_llm, tools=tools, poster=NoopPoster())
+        final = graph.invoke(initial)
 
     print("=" * 72)
     print("REVIEW BODY")
