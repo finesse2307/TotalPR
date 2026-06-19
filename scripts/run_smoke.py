@@ -1,17 +1,4 @@
 """Manual smoke test: run the agent against one eval case using real Anthropic.
-
-Loads .env for ANTHROPIC_API_KEY, builds the LLM stack
-(Anthropic client → SQLite cache → budget tracker), wires real Ruff and stubs
-for the other three tools, runs one case from evals/eval_set.json through the
-graph, and prints the resulting review.
-
-Usage:
-    python scripts/run_smoke.py             # first case
-    python scripts/run_smoke.py case-001    # by id
-    python scripts/run_smoke.py 4           # by 1-indexed position
-
-This is the first place we spend real Anthropic credits. Default cap is $0.50
-in-process; the platform-level prepaid balance remains the true ceiling.
 """
 
 import argparse
@@ -29,7 +16,7 @@ from sentry.graph import build_graph
 from sentry.nodes.run_tool import ToolRegistry
 from sentry.posting import NoopPoster
 from sentry.state import AgentState, PRMetadata, ToolName
-from sentry.telemetry import init_tracing
+from sentry.telemetry import init_tracing, run_span
 from sentry.tools.docs_lookup_tool import make_docs_lookup_tool
 from sentry.tools.ripgrep_tool import make_ripgrep_tool
 from sentry.tools.ruff_tool import make_ruff_tool
@@ -148,7 +135,8 @@ def main() -> int:
         }
 
         graph = build_graph(llm=budgeted_llm, tools=tools, poster=NoopPoster())
-        final = graph.invoke(initial)
+        with run_span("review_pr"):
+            final = graph.invoke(initial)
 
     print("=" * 72)
     print("REVIEW BODY")

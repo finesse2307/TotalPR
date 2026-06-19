@@ -22,6 +22,7 @@ from sentry.graph import build_graph
 from sentry.nodes.run_tool import ToolRegistry
 from sentry.posting import NoopPoster
 from sentry.state import AgentState, Finding, PRMetadata, ToolName
+from sentry.telemetry import run_span
 from sentry.tools.docs_lookup_tool import make_docs_lookup_tool
 from sentry.tools.ripgrep_tool import make_ripgrep_tool
 from sentry.tools.ruff_tool import make_ruff_tool
@@ -149,7 +150,8 @@ def _run_case(
             graph = build_graph(
                 llm=budgeted_llm, tools=tools, poster=NoopPoster()
             )
-            final = graph.invoke(initial)
+            with run_span(f"review_pr:{case['id']}"):
+                final = graph.invoke(initial)
     except BudgetExceededError as exc:
         return {
             "id": case["id"],

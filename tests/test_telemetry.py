@@ -1,9 +1,4 @@
 """Tests for the telemetry module.
-
-Behavior tests for ``with_span`` (returns wrapped function's result, propagates
-exceptions, records ``result.keys`` attribute) plus idempotency check on
-``init_tracing``. Uses OpenTelemetry's official ``InMemorySpanExporter`` for
-the attribute-capture test.
 """
 
 import pytest
@@ -65,3 +60,15 @@ def test_with_span_records_result_keys_attribute() -> None:
     my_op = next(s for s in finished if s.name == "my_op")
     assert my_op.attributes is not None
     assert my_op.attributes.get("result.keys") == "alpha,beta"
+
+def test_run_span_provides_active_recording_span() -> None:
+    """Inside a run_span block, the current span is a real recording span."""
+    from opentelemetry import trace
+
+    from sentry.telemetry import init_tracing, run_span
+
+    init_tracing()
+    with run_span("test-run"):
+        ctx = trace.get_current_span().get_span_context()
+        assert ctx.span_id != 0  # the default no-op span has span_id == 0
+        assert ctx.trace_id != 0
