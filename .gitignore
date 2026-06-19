@@ -37,3 +37,4 @@ htmlcov/
 # LangGraph / agent traces (local only)
 .langgraph_cache/
 traces/
+evals/results/

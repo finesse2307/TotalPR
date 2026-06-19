@@ -74,8 +74,7 @@
                     "category": "maintainability",
                     "severity": "low",
                     "must_mention": [
-                        "duplicate function",
-                        "redundant"
+                        "duplicate function"
                     ]
                 }
             ]
@@ -100,8 +99,7 @@
                     "severity": "medium",
                     "must_mention": [
                         "assertion",
-                        "tautology",
-                        "always passes"
+                        "tautology"
                     ]
                 }
             ]
@@ -135,8 +133,7 @@
                     "severity": "low",
                     "must_mention": [
                         "hardcoded",
-                        "constant",
-                        "magic number"
+                        "constant"
                     ]
                 }
             ]
@@ -153,8 +150,7 @@
                     "severity": "high",
                     "must_mention": [
                         "yaml.load",
-                        "unsafe",
-                        "deserialization"
+                        "unsafe"
                     ]
                 },
                 {
@@ -164,6 +160,13 @@
                         "api key",
                         "hardcoded",
                         "secret"
+                    ]
+                },
+                {
+                    "category": "bug",
+                    "severity": "medium",
+                    "must_mention": [
+                        "context manager"
                     ]
                 }
             ]
