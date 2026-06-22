@@ -11,12 +11,15 @@ from collections.abc import Callable
 from pydantic import BaseModel, Field, ValidationError
 
 from sentry.llm import LLMClient, Message, ToolDef
+from sentry.memory import Memory, MemoryStore
 from sentry.state import AgentState, Finding
 
 _SYSTEM_PROMPT = """\
 You are the critique component of an automated code review system. You are given:
 - The PR diff (files and hunks that changed)
 - Results from review tools that were run on the diff (Ruff, Semgrep, ripgrep, docs)
+- Optionally, a "Past Review Outcomes" section showing how similar past \
+feedback was received by the team
 
 Produce structured findings a human reviewer would care about. Defer to tool \
 output for things tools catch (Ruff for style, Semgrep for security patterns); \
@@ -25,6 +28,10 @@ intent mismatches).
 
 If a tool reported an error, do not invent findings from it; treat that tool's \
 evidence as missing.
+
+If a "Past Review Outcomes" section is present, use it to calibrate: avoid \
+raising findings similar to ones the team has REJECTED, and prioritize \
+patterns the team has ACCEPTED.
 
 Call submit_findings with the list of findings. An empty list is a valid answer \
 when the diff has no actionable issues.
@@ -113,11 +120,36 @@ def _format_prompt(state: AgentState) -> str:
 
     return "\n".join(lines)
 
+def _format_memory_section(memories: list[Memory]) -> str:
+    """Render retrieved memories as a markdown prompt section.
+
+    Outcomes are surfaced explicitly so the LLM can weight them: ACCEPTED
+    findings are signal to repeat; REJECTED findings are signal to suppress.
+    """
+    lines = [
+        "## Past Review Outcomes",
+        "",
+        (
+            "Similar past feedback from this repository, with team outcomes. "
+            "Avoid raising findings similar to REJECTED ones; prioritize "
+            "patterns similar to ACCEPTED ones."
+        ),
+        "",
+    ]
+    for i, m in enumerate(memories, start=1):
+        outcome = "ACCEPTED" if m.was_accepted else "REJECTED"
+        lines.append(
+            f"{i}. [{outcome}] [{m.category.value}/{m.severity.value}] "
+            f"{m.finding_text}"
+        )
+    return "\n".join(lines)
 
 def make_critique_node(
     llm: LLMClient,
+    *,
+    memory: MemoryStore | None = None,
 ) -> Callable[[AgentState], dict[str, list[Finding]]]:
-    """Build a critique-node bound to a specific LLMClient."""
+    """Build a critique-node bound to a specific LLMClient and optional memory."""
 
     def critique_node(state: AgentState) -> dict[str, list[Finding]]:
         if state.diff is None:
@@ -126,8 +158,20 @@ def make_critique_node(
                 "did parse_diff run?"
             )
 
+        prompt = _format_prompt(state)
+
+        if memory is not None:
+            similar = memory.retrieve_similar(
+                diff_text=state.raw_diff,
+                repo=state.pr.repo,
+                k=3,
+                only_labeled=True,
+            )
+            if similar:
+                prompt = _format_memory_section(similar) + "\n\n" + prompt
+
         response = llm.complete(
-            messages=[Message(role="user", content=_format_prompt(state))],
+            messages=[Message(role="user", content=prompt)],
             system=_SYSTEM_PROMPT,
             tools=[_SUBMIT_FINDINGS_TOOL],
         )

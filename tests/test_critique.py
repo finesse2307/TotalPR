@@ -6,9 +6,14 @@ error paths (no submit_findings, validation failure, missing diff), and the
 empty-findings outcome for clean PRs.
 """
 
+import os
+
+import psycopg
 import pytest
 
+from sentry.embedding import DeterministicMockEmbeddingClient
 from sentry.llm import LLMResponse, LLMToolCall, MockLLMClient
+from sentry.memory import MemoryStore
 from sentry.nodes.critique import make_critique_node
 from sentry.state import (
     AgentState,
@@ -196,3 +201,68 @@ def test_empty_findings_is_valid() -> None:
     findings = make_critique_node(mock)(_make_state())["findings"]
 
     assert findings == []
+
+_DSN = os.environ.get(
+    "POSTGRES_TEST_DSN",
+    "postgresql://sentry:sentry_dev_password@localhost:5432/sentry",
+)
+
+
+@pytest.fixture
+def memory_store() -> MemoryStore:
+    """A MemoryStore against a freshly truncated memories table.
+
+    Skips if Postgres isn't reachable so this file still passes in DB-less CI.
+    """
+    try:
+        with psycopg.connect(_DSN, connect_timeout=2) as conn, conn.cursor() as cur:
+            cur.execute("TRUNCATE memories RESTART IDENTITY")
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"Postgres not reachable: {exc}")
+    return MemoryStore(
+        dsn=_DSN,
+        embedder=DeterministicMockEmbeddingClient(dimension=1024),
+    )
+
+
+def test_memory_section_absent_when_no_matches(
+    memory_store: MemoryStore,
+) -> None:
+    """Empty memory store → no memory section appended to prompt."""
+    mock = MockLLMClient([_submit_findings_response()])
+    make_critique_node(mock, memory=memory_store)(_make_state())
+
+    prompt = mock.calls[0][0][0].content
+    assert "Past Review Outcomes" not in prompt
+
+
+def test_memory_section_present_when_matches_exist(
+    memory_store: MemoryStore,
+) -> None:
+    """Stored labeled memories appear as a section in the prompt with outcomes."""
+    memory_store.store(
+        repo="acme/x",
+        diff_text="(unused)",
+        finding_text="Use parameterized queries to prevent SQL injection",
+        category=Category.SECURITY,
+        severity=Severity.HIGH,
+        was_accepted=True,
+    )
+    memory_store.store(
+        repo="acme/x",
+        diff_text="(unused)",
+        finding_text="Prefer list comprehension over explicit loops",
+        category=Category.STYLE,
+        severity=Severity.LOW,
+        was_accepted=False,
+    )
+
+    mock = MockLLMClient([_submit_findings_response()])
+    make_critique_node(mock, memory=memory_store)(_make_state())
+
+    prompt = mock.calls[0][0][0].content
+    assert "Past Review Outcomes" in prompt
+    assert "[ACCEPTED]" in prompt
+    assert "[REJECTED]" in prompt
+    assert "parameterized queries" in prompt
+    assert "list comprehension" in prompt

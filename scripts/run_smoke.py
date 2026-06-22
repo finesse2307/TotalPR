@@ -12,7 +12,9 @@ from typing import Any
 from sentry.anthropic_client import AnthropicLLMClient
 from sentry.budget import BudgetedLLMClient
 from sentry.cache import SQLiteCacheLLMClient
+from sentry.embedding import VoyageEmbeddingClient
 from sentry.graph import build_graph
+from sentry.memory import MemoryStore
 from sentry.nodes.run_tool import ToolRegistry
 from sentry.posting import NoopPoster
 from sentry.state import AgentState, PRMetadata, ToolName
@@ -83,6 +85,10 @@ def main() -> int:
         "--trace", action="store_true",
         help="Enable console export of OpenTelemetry spans.",
     )
+    parser.add_argument(
+        "--memory", action="store_true",
+        help="Enable memory retrieval and writing (requires VOYAGE_API_KEY + Postgres).",
+    )
     args = parser.parse_args()
 
     load_env_file(Path(".env"))
@@ -123,6 +129,23 @@ def main() -> int:
         raw_diff=raw_diff,
     )
 
+    memory: MemoryStore | None = None
+    if args.memory:
+        if not os.environ.get("VOYAGE_API_KEY"):
+            print(
+                "ERROR: --memory requires VOYAGE_API_KEY in env or .env",
+                file=sys.stderr,
+            )
+            return 1
+        dsn = (
+            f"postgresql://{os.environ.get('POSTGRES_USER', 'sentry')}:"
+            f"{os.environ.get('POSTGRES_PASSWORD', 'sentry_dev_password')}@"
+            f"{os.environ.get('POSTGRES_HOST', 'localhost')}:"
+            f"{os.environ.get('POSTGRES_PORT', '5432')}/"
+            f"{os.environ.get('POSTGRES_DB', 'sentry')}"
+        )
+        memory = MemoryStore(dsn=dsn, embedder=VoyageEmbeddingClient())
+
     with tempfile.TemporaryDirectory(prefix="sentry-ws-") as ws_str:
         workspace = Path(ws_str)
         materialize_workspace(raw_diff, workspace)
@@ -134,7 +157,12 @@ def main() -> int:
             ToolName.DOCS_LOOKUP: make_docs_lookup_tool(),
         }
 
-        graph = build_graph(llm=budgeted_llm, tools=tools, poster=NoopPoster())
+        graph = build_graph(
+            llm=budgeted_llm,
+            tools=tools,
+            poster=NoopPoster(),
+            memory=memory,
+        )
         with run_span("review_pr"):
             final = graph.invoke(initial)
 
