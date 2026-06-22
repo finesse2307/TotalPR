@@ -38,3 +38,4 @@ htmlcov/
 .langgraph_cache/
 traces/
 evals/results/
+secrets/
