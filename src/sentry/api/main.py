@@ -18,6 +18,8 @@ from typing import Any
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from sentry.dedupe import Deduper, NullDeduper
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -82,12 +84,14 @@ def verify_signature(
 def create_app(
     settings: Settings | None = None,
     dispatch_fn: "Callable[[dict[str, Any], Settings], None] | None" = None,
+    deduper: Deduper | None = None,
 ) -> FastAPI:
-    """FastAPI factory. ``dispatch_fn`` is injectable for tests."""
+    """FastAPI factory. ``dispatch_fn`` and ``deduper`` are injectable for tests."""
     from sentry.api.dispatch import dispatch_pull_request
 
     cfg = settings or Settings()  # type: ignore[call-arg]
     dispatch = dispatch_fn or dispatch_pull_request
+    dedupe = deduper or NullDeduper()
     app = FastAPI(title="TotalPR", version="0.4.0")
 
     @app.get("/health")
@@ -97,7 +101,7 @@ def create_app(
     @app.post("/webhook")
     async def webhook(
         request: Request, background: BackgroundTasks
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         body = await request.body()
         signature = request.headers.get("X-Hub-Signature-256", "")
 
@@ -123,6 +127,11 @@ def create_app(
         )
 
         if event_type == "pull_request":
+            if not dedupe.mark_seen(delivery_id):
+                logger.info(
+                    "duplicate delivery skipped: delivery=%s", delivery_id
+                )
+                return {"status": "ok", "event": event_type, "duplicate": True}
             logger.info("scheduling dispatch for delivery=%s", delivery_id)
             background.add_task(dispatch, payload, cfg)
         else:

@@ -150,3 +150,53 @@ def test_webhook_pull_request_triggers_dispatch(
     # TestClient runs background tasks synchronously before returning
     assert len(calls) == 1
     assert calls[0]["action"] == "opened"
+
+def test_duplicate_delivery_skipped(settings: Settings) -> None:
+    """A delivery_id seen before is skipped without invoking dispatch."""
+    from sentry.dedupe import Deduper
+
+    calls: list[dict[str, object]] = []
+
+    def capture_dispatch(payload: dict[str, object], _s: Settings) -> None:
+        calls.append(payload)
+
+    class OnceDeduper:
+        def __init__(self) -> None:
+            self.seen: set[str] = set()
+
+        def mark_seen(self, delivery_id: str) -> bool:
+            if delivery_id in self.seen:
+                return False
+            self.seen.add(delivery_id)
+            return True
+
+    deduper: Deduper = OnceDeduper()
+    client = TestClient(
+        create_app(
+            settings=settings,
+            dispatch_fn=capture_dispatch,
+            deduper=deduper,
+        )
+    )
+
+    body = json.dumps(
+        {
+            "action": "opened",
+            "repository": {"full_name": "x/y"},
+            "pull_request": {"number": 1},
+        }
+    ).encode()
+    headers = {
+        "X-Hub-Signature-256": _sign(body),
+        "X-GitHub-Event": "pull_request",
+        "X-GitHub-Delivery": "delivery-XYZ",
+    }
+
+    r1 = client.post("/webhook", content=body, headers=headers)
+    r2 = client.post("/webhook", content=body, headers=headers)
+
+    assert r1.status_code == 200
+    assert r1.json().get("duplicate") is not True
+    assert r2.status_code == 200
+    assert r2.json().get("duplicate") is True
+    assert len(calls) == 1  # only the first dispatch fired
