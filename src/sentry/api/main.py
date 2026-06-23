@@ -179,4 +179,17 @@ def create_app(
     return app
 
 
-app = create_app()
+def get_app() -> FastAPI:
+    """Lazy app factory. Uvicorn calls this; tests don't.
+
+    Constructing the FastAPI app eagerly at import would call
+    ``Settings()``, which fails if no ``.env`` is present and no GitHub
+    secrets are in the environment — breaking ``pytest`` and fresh-clone
+    collection. Deferring lets tests import ``create_app`` without
+    instantiating it.
+    """
+    return create_app()
+
+
+# Uvicorn target. Use the factory mode: ``uvicorn sentry.api.main:get_app --factory``
+app = None
