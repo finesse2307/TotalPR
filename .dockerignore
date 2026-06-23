@@ -1,0 +1,12 @@
+.venv/
+.cache/
+secrets/
+.env
+.git/
+.pytest_cache/
+__pycache__/
+*.pyc
+evals/results/
+tests/
+docker/
+scripts/

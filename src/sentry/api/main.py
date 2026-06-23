@@ -39,6 +39,28 @@ def _load_env_file(path: Path) -> None:
         value = value.strip().strip('"').strip("'")
         os.environ.setdefault(key.strip(), value)
 
+def _materialize_private_key() -> None:
+    """Write GITHUB_PRIVATE_KEY contents to GITHUB_PRIVATE_KEY_PATH if both are set.
+
+    Fly secrets can't ship file contents directly — we pass the PEM as an env
+    var and write it to the path the rest of the code expects.
+    """
+    import os
+
+    contents = os.environ.get("GITHUB_PRIVATE_KEY")
+    target = os.environ.get("GITHUB_PRIVATE_KEY_PATH")
+    if not contents or not target:
+        return
+    target_path = Path(target)
+    if target_path.exists():
+        return
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(contents)
+    target_path.chmod(0o600)
+
+
+_materialize_private_key()
+
 
 # Load .env on import so non-Settings env vars (ANTHROPIC_API_KEY, VOYAGE_API_KEY,
 # POSTGRES_*) are available to the rest of the agent stack at dispatch time.
@@ -57,6 +79,7 @@ class Settings(BaseSettings):
     github_installation_id: int
     github_test_repo: str
     reviews_enabled: bool = True
+    redis_url: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -91,7 +114,19 @@ def create_app(
 
     cfg = settings or Settings()  # type: ignore[call-arg]
     dispatch = dispatch_fn or dispatch_pull_request
-    dedupe = deduper or NullDeduper()
+    if deduper is not None:
+        dedupe: Deduper = deduper
+    elif cfg.redis_url:
+        import redis as redis_lib
+
+        from sentry.dedupe import RedisDeduper
+        dedupe = RedisDeduper(
+            client=redis_lib.Redis.from_url(cfg.redis_url, decode_responses=True)
+        )
+        logger.info("dedupe: redis enabled")
+    else:
+        dedupe = NullDeduper()
+        logger.info("dedupe: disabled (no REDIS_URL)")
     app = FastAPI(title="TotalPR", version="0.4.0")
 
     @app.get("/health")

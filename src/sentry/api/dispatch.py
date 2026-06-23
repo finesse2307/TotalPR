@@ -95,6 +95,8 @@ def dispatch_pull_request(
 
 
 def _postgres_dsn() -> str:
+    if dsn := os.environ.get("DATABASE_URL"):
+        return dsn
     return (
         f"postgresql://{os.environ.get('POSTGRES_USER', 'sentry')}:"
         f"{os.environ.get('POSTGRES_PASSWORD', 'sentry_dev_password')}@"
